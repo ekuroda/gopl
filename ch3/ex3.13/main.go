@@ -1,0 +1,20 @@
+package main
+
+import (
+	"fmt"
+)
+
+const (
+	KB = 1000.0
+	MB = 1000 * KB
+	GB = 1000 * MB
+	TB = 1000 * GB
+	PB = 1000 * TB
+	EB = 1000 * PB
+	ZB = 1000 * EB
+	YB = 1000 * ZB
+)
+
+func main() {
+	fmt.Printf("%g\n%g\n%g\n%g\n%g\n%g\n%g\n%g\n", KB, MB, GB, TB, PB, EB, ZB, YB)
+}
