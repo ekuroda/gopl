@@ -1,10 +1,11 @@
-package main
+package counter
 
 import (
 	"bufio"
 	"bytes"
 )
 
+// WordCounter ...
 type WordCounter int
 
 func (c *WordCounter) Write(p []byte) (int, error) {
@@ -24,6 +25,7 @@ func (c *WordCounter) Write(p []byte) (int, error) {
 	return count, nil
 }
 
+// LineCounter ...
 type LineCounter int
 
 func (c *LineCounter) Write(p []byte) (int, error) {
@@ -43,6 +45,7 @@ func (c *LineCounter) Write(p []byte) (int, error) {
 	return count, nil
 }
 
+// WordCounter2 ...
 type WordCounter2 int
 
 func (c *WordCounter2) Write(p []byte) (int, error) {
@@ -56,6 +59,7 @@ func (c *WordCounter2) Write(p []byte) (int, error) {
 	return count, nil
 }
 
+// LineCounter2 ...
 type LineCounter2 int
 
 func (c *LineCounter2) Write(p []byte) (int, error) {
