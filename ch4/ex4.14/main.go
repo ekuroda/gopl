@@ -108,28 +108,32 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reader := bufio.NewReader(strings.NewReader(`<html lang="ja"><head><meta charset="utf-8"></head><body>`))
-	if _, err := reader.WriteTo(w); err != nil {
+	if _, err = reader.WriteTo(w); err != nil {
 		log.Printf("failed to write response: %s", err)
 		http.Error(w, "failed to write response", 500)
+		return
 	}
 
-	if issuesTemplate.Execute(w, rd.issues); err != nil {
+	if err = issuesTemplate.Execute(w, rd.issues); err != nil {
 		log.Printf("failed to write issues template: %s", err)
 		http.Error(w, "failed to write response", 500)
+		return
 	}
 
-	if milestonesTemplate.Execute(w, rd.milestones); err != nil {
+	if err = milestonesTemplate.Execute(w, rd.milestones); err != nil {
 		log.Printf("failed to write milestones template: %s", err)
 		http.Error(w, "failed to write response", 500)
+		return
 	}
 
-	if collaboratorsTemplate.Execute(w, rd.collaborators); err != nil {
+	if err = collaboratorsTemplate.Execute(w, rd.collaborators); err != nil {
 		log.Printf("failed to write collaborators template: %s", err)
 		http.Error(w, "failed to write response", 500)
+		return
 	}
 
 	reader = bufio.NewReader(strings.NewReader(`</body></html>`))
-	if _, err := reader.WriteTo(w); err != nil {
+	if _, err = reader.WriteTo(w); err != nil {
 		log.Printf("failed to write response: %s", err)
 		http.Error(w, "failed to write response", 500)
 	}
