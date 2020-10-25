@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"golang.org/x/net/html"
 )
@@ -16,8 +17,18 @@ import (
 var rootDir string = "../download"
 
 type crawler struct {
-	urllist  []string
+	root     string
 	hostname string
+}
+
+type job struct {
+	url   string
+	depth int
+}
+
+type jobResult struct {
+	job       *job
+	foundJobs []*job
 }
 
 func newCrawler(rootURL string) (*crawler, error) {
@@ -26,11 +37,8 @@ func newCrawler(rootURL string) (*crawler, error) {
 		return nil, err
 	}
 
-	var urllist []string
-	urllist = append(urllist, rootURL)
-
 	c := &crawler{
-		urllist:  urllist,
+		root:     rootURL,
 		hostname: root.Hostname(),
 	}
 	return c, nil
@@ -51,32 +59,74 @@ func (c *crawler) process() error {
 }
 
 func (c *crawler) breathFirst() {
+	workChan := make(chan *job, 10)
+	resultChan := make(chan *jobResult)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			for job := range workChan {
+				foundJobs := c.crawl(job)
+				resultChan <- &jobResult{job: job, foundJobs: foundJobs}
+			}
+			wg.Done()
+		}()
+	}
+
+	var jobq []*job
+	jobq = append(jobq, &job{
+		url:   c.root,
+		depth: 0,
+	})
+	processing := make(map[string]struct{})
 	seen := make(map[string]bool)
-	for len(c.urllist) > 0 {
-		items := c.urllist
-		c.urllist = nil
-		for _, item := range items {
-			if !seen[item] {
-				seen[item] = true
-				c.crawl(item)
+
+	go func() {
+		for len(jobq) > 0 || len(processing) > 0 {
+			if len(jobq) > 0 {
+				j := jobq[0]
+				select {
+				case workChan <- j:
+					jobq = jobq[1:]
+					processing[j.url] = struct{}{}
+				default:
+				}
+			}
+			select {
+			case result, ok := <-resultChan:
+				if ok {
+					delete(processing, result.job.url)
+					for _, j := range result.foundJobs {
+						if !seen[j.url] {
+							seen[j.url] = true
+							jobq = append(jobq, j)
+						}
+					}
+				}
+			default:
 			}
 		}
-	}
+		close(workChan)
+		close(resultChan)
+	}()
+
+	wg.Wait()
 }
 
-func (c *crawler) crawl(urlString string) {
-	fmt.Println(urlString)
+func (c *crawler) crawl(j *job) []*job {
+	log.Printf("%d: %s", j.depth, j.url)
 
-	u, err := url.Parse(urlString)
+	u, err := url.Parse(j.url)
 	if err != nil {
-		log.Printf("failed to parse url %s: %v", urlString, err)
-		return
+		log.Printf("failed to parse url %s: %v", j.url, err)
+		return nil
 	}
 
-	doc, err := c.openURL(urlString)
+	doc, jobs, err := c.openURL(j)
 	if err != nil {
 		log.Print(err)
-		return
+		return nil
 	}
 
 	requestURI := u.RequestURI()
@@ -86,63 +136,70 @@ func (c *crawler) crawl(urlString string) {
 	if _, err = os.Stat(path); err == nil {
 		if err = os.Remove(path); err != nil {
 			log.Printf("failed to remove file %s: %v", path, err)
-			return
+			return jobs
 		}
 	}
 
 	file, err := os.Create(path)
 	if err != nil {
 		log.Printf("failed to create file %s: %v", path, err)
-		return
+		return jobs
 	}
 
 	defer file.Close()
 
 	err = html.Render(file, doc)
 	if err != nil {
-		log.Printf("failed to render %s: %v", urlString, err)
+		log.Printf("failed to render %s: %v", j.url, err)
 	}
+
+	return jobs
 }
 
-func (c *crawler) openURL(url string) (*html.Node, error) {
-	resp, err := http.Get(url)
+func (c *crawler) openURL(j *job) (*html.Node, []*job, error) {
+	resp, err := http.Get(j.url)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf("getting %s: %s", url, resp.Status)
+		return nil, nil, fmt.Errorf("getting %s: %s", j.url, resp.Status)
 	}
 
 	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading body %s: %v", url, err)
+		return nil, nil, fmt.Errorf("reading body %s: %v", j.url, err)
 	}
 	resp.Body.Close()
 
 	reader := bytes.NewReader(b)
 	doc, err := html.Parse(reader)
 	if err != nil {
-		return nil, fmt.Errorf("parsing %s as HTML: %v", url, err)
+		return nil, nil, fmt.Errorf("parsing %s as HTML: %v", j.url, err)
 	}
 
-	c.forEachNode(doc, resp)
+	jobs := c.forEachNode(j, doc, resp)
 
-	return doc, nil
+	return doc, jobs, nil
 }
 
-func (c *crawler) forEachNode(n *html.Node, resp *http.Response) {
-	c.visitNode(n, resp)
+func (c *crawler) forEachNode(j *job, n *html.Node, resp *http.Response) []*job {
+	var jobs []*job
+	jobs = append(jobs, c.visitNode(j, n, resp)...)
 
 	for cn := n.FirstChild; cn != nil; cn = cn.NextSibling {
-		c.forEachNode(cn, resp)
+		jobs = append(jobs, c.forEachNode(j, cn, resp)...)
 	}
+
+	return jobs
 }
 
-func (c *crawler) visitNode(n *html.Node, resp *http.Response) {
+func (c *crawler) visitNode(j *job, n *html.Node, resp *http.Response) []*job {
 	if n.Type != html.ElementNode {
-		return
+		return nil
 	}
+
+	var jobs []*job
 
 	if n.Data == "a" || n.Data == "area" || n.Data == "base" || n.Data == "link" {
 		var attr []html.Attribute
@@ -160,14 +217,27 @@ func (c *crawler) visitNode(n *html.Node, resp *http.Response) {
 
 			href := a.Val
 			if link.Hostname() == c.hostname {
-				log.Printf("\t> href: %s => %s", href, link.RequestURI())
+				//log.Printf("\t> href: %s => %s", href, link.RequestURI())
 				a.Val = link.RequestURI()
 			}
 
 			abs, err := resp.Request.URL.Parse(href)
 			if err == nil {
 				if abs.Hostname() == c.hostname {
-					c.urllist = append(c.urllist, abs.String())
+					jobs = append(jobs, &job{
+						url:   abs.String(),
+						depth: j.depth + 1,
+					})
+					// if j.depth <= 2 &&
+					// 	!strings.HasSuffix(href, ".gz") &&
+					// 	!strings.HasSuffix(href, ".zip") &&
+					// 	!strings.HasSuffix(href, ".msi") &&
+					// 	!strings.HasSuffix(href, ".pkg") {
+					// 	jobs = append(jobs, &job{
+					// 		url:   abs.String(),
+					// 		depth: j.depth + 1,
+					// 	})
+					// }
 				}
 			} else {
 				log.Print(err)
@@ -191,12 +261,14 @@ func (c *crawler) visitNode(n *html.Node, resp *http.Response) {
 				continue
 			}
 
-			log.Printf("\t> src: %s => %s", a.Val, abs.String())
+			//log.Printf("\t> src: %s => %s", a.Val, abs.String())
 			a.Val = abs.String()
 			attr = append(attr, a)
 		}
 		n.Attr = attr
 	}
+
+	return jobs
 }
 
 func main() {
